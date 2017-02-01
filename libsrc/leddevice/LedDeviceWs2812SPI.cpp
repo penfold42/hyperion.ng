@@ -1,3 +1,31 @@
+/*
+A bit of theory of operations....
+
+This driver assumes:
+- dma capable SPI driver that can send the request in ONE HIT.
+- a stable SPI clock (which on the Ras Pi requires a stable core clock)
+
+From the ws2812 spec sheet typical values:
+A '0' is signalled as a high/low pulse time of 350ns/800ns
+A '1' is signalled as a high/low pulse time of 700ns/600ns
+A reset/latch is signalled as a low signal for 50,000ns
+
+The spi bit rate combined with the bitpair_to_byte table set this timing
+At 3,000,000 bit/second (333nS per bit):
+0: 1000 = high/low for 333nS/999nS
+1: 1100 = high/low for 666nS/666nS
+
+The reset pulse is sent as SPI_FRAME_END_LATCH_BYTES (3 bytes = 24) bits of zeros
+At 3,000,000 bit/second (333nS per bit) = 8000nS
+This is well below spec, but seems to work well with ws2812 and sk6812w leds
+
+If you want to be within the specs, you could change it:
+ws2812	50,000ns	(150bits = 19 bytes)
+ws2813 300,000ns	(900buits = 113 bytes)
+sk6812	80,000ns	(240bits = 80 bytes)
+
+*/
+
 #include "LedDeviceWs2812SPI.h"
 
 LedDeviceWs2812SPI::LedDeviceWs2812SPI(const QJsonObject &deviceConfig)
@@ -28,14 +56,16 @@ bool LedDeviceWs2812SPI::init(const QJsonObject &deviceConfig)
 	WarningIf(( _baudRate_Hz < 2050000 || _baudRate_Hz > 4000000 ), _log, "SPI rate %d outside recommended range (2050000 -> 4000000)", _baudRate_Hz);
 
 	const int SPI_FRAME_END_LATCH_BYTES = 3;
-	_ledBuffer.resize(_ledRGBCount * SPI_BYTES_PER_COLOUR + SPI_FRAME_END_LATCH_BYTES, 0x00);
+	// 2 * SPI_FRAME_END_LATCH_BYTES because we'll also do a reset at the start
+	_ledBuffer.resize(_ledRGBCount * SPI_BYTES_PER_COLOUR + 2*SPI_FRAME_END_LATCH_BYTES, 0x00);
 
 	return true;
 }
 
 int LedDeviceWs2812SPI::write(const std::vector<ColorRgb> &ledValues)
 {
-	unsigned spi_ptr = 0;
+	unsigned spi_ptr = SPI_FRAME_END_LATCH_BYTES;
+	// SPI_FRAME_END_LATCH_BYTES because we'll also do a reset at the start
 	const int SPI_BYTES_PER_LED = sizeof(ColorRgb) * SPI_BYTES_PER_COLOUR;
 
 	for (const ColorRgb& color : ledValues)
